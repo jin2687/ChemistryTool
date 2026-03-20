@@ -41,27 +41,28 @@ const LevelForm: React.FC<Props> = ({ levels, onAdd, onUpdate, onDelete }) => {
 
   return (
     <div>
-      <form onSubmit={handleSubmit} className="mb-3 space-y-2">
-        <div className="flex gap-2">
-          <input
-            type="text"
-            placeholder="状態名 (例: Na(s) + ½Cl₂)"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            className="flex-1 px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400"
-          />
-          <input
-            type="number"
-            placeholder="エネルギー"
-            value={energy}
-            onChange={(e) => setEnergy(e.target.value)}
-            className="w-28 px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400"
-          />
-        </div>
+      <p className="text-xs text-gray-400 mb-3">状態名とエネルギー値（kJ/mol）を入力してください</p>
+
+      <form onSubmit={handleSubmit} className="mb-4 space-y-2">
+        <input
+          type="text"
+          placeholder="状態名（例: Na(s) + ½Cl₂(g)）"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          className="w-full px-3 py-3 text-base border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"
+        />
+        <input
+          type="number"
+          inputMode="decimal"
+          placeholder="エネルギー (kJ/mol)"
+          value={energy}
+          onChange={(e) => setEnergy(e.target.value)}
+          className="w-full px-3 py-3 text-base border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"
+        />
         <div className="flex gap-2">
           <button
             type="submit"
-            className="flex-1 py-1.5 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
+            className="flex-1 py-3 text-base font-medium bg-blue-600 text-white rounded-xl active:bg-blue-700"
           >
             {editingId ? '更新' : '追加'}
           </button>
@@ -69,7 +70,7 @@ const LevelForm: React.FC<Props> = ({ levels, onAdd, onUpdate, onDelete }) => {
             <button
               type="button"
               onClick={resetForm}
-              className="px-4 py-1.5 text-sm bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 transition-colors"
+              className="px-5 py-3 text-base bg-gray-200 text-gray-700 rounded-xl active:bg-gray-300"
             >
               キャンセル
             </button>
@@ -77,26 +78,26 @@ const LevelForm: React.FC<Props> = ({ levels, onAdd, onUpdate, onDelete }) => {
         </div>
       </form>
 
-      <div className="space-y-1.5">
+      <div className="space-y-2">
         {levels.map((level) => (
           <div
             key={level.id}
-            className="flex items-center justify-between px-3 py-2 bg-gray-50 border border-gray-200 rounded-md text-sm"
+            className="flex items-center justify-between px-3 py-3 bg-white border border-gray-200 rounded-xl"
           >
             <div className="flex-1 min-w-0">
-              <span className="font-medium text-gray-800 truncate block">{level.name}</span>
-              <span className="text-gray-500 text-xs">{level.energy} kJ/mol</span>
+              <p className="font-medium text-gray-800 text-sm truncate">{level.name}</p>
+              <p className="text-gray-500 text-xs mt-0.5">{level.energy} kJ/mol</p>
             </div>
-            <div className="flex gap-1 ml-2 shrink-0">
+            <div className="flex gap-2 ml-3 shrink-0">
               <button
                 onClick={() => handleEdit(level)}
-                className="px-2 py-1 text-xs bg-amber-100 text-amber-700 rounded hover:bg-amber-200 transition-colors"
+                className="px-3 py-1.5 text-sm bg-amber-100 text-amber-700 rounded-lg active:bg-amber-200"
               >
                 編集
               </button>
               <button
                 onClick={() => onDelete(level.id)}
-                className="px-2 py-1 text-xs bg-red-100 text-red-600 rounded hover:bg-red-200 transition-colors"
+                className="px-3 py-1.5 text-sm bg-red-100 text-red-600 rounded-lg active:bg-red-200"
               >
                 削除
               </button>
@@ -104,7 +105,7 @@ const LevelForm: React.FC<Props> = ({ levels, onAdd, onUpdate, onDelete }) => {
           </div>
         ))}
         {levels.length === 0 && (
-          <p className="text-gray-400 text-sm text-center py-3">状態がありません</p>
+          <p className="text-gray-400 text-sm text-center py-4">状態がありません</p>
         )}
       </div>
     </div>

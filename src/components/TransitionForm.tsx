@@ -66,34 +66,36 @@ const TransitionForm: React.FC<Props> = ({ levels, transitions, onAdd, onUpdate,
 
   return (
     <div>
-      <form onSubmit={handleSubmit} className="mb-3 space-y-2">
+      <p className="text-xs text-gray-400 mb-3">始点と終点を選択して矢印を追加してください</p>
+
+      <form onSubmit={handleSubmit} className="mb-4 space-y-2">
         <div className="grid grid-cols-2 gap-2">
           <div>
-            <label className="block text-xs text-gray-500 mb-1">始点（From）</label>
+            <label className="block text-xs text-gray-500 mb-1 ml-1">始点（From）</label>
             <select
               value={fromLevelId}
               onChange={(e) => setFromLevelId(e.target.value)}
-              className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"
+              className="w-full px-3 py-3 text-base border border-gray-300 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-blue-400"
             >
               <option value="">選択...</option>
               {levels.map((l) => (
                 <option key={l.id} value={l.id}>
-                  {l.name} ({l.energy})
+                  {l.name}
                 </option>
               ))}
             </select>
           </div>
           <div>
-            <label className="block text-xs text-gray-500 mb-1">終点（To）</label>
+            <label className="block text-xs text-gray-500 mb-1 ml-1">終点（To）</label>
             <select
               value={toLevelId}
               onChange={(e) => setToLevelId(e.target.value)}
-              className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"
+              className="w-full px-3 py-3 text-base border border-gray-300 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-blue-400"
             >
               <option value="">選択...</option>
               {levels.map((l) => (
                 <option key={l.id} value={l.id}>
-                  {l.name} ({l.energy})
+                  {l.name}
                 </option>
               ))}
             </select>
@@ -102,30 +104,31 @@ const TransitionForm: React.FC<Props> = ({ levels, transitions, onAdd, onUpdate,
 
         <input
           type="text"
-          placeholder="ラベル (例: 結合エネルギー, 生成熱)"
+          placeholder="ラベル（例: 格子エネルギー）"
           value={label}
           onChange={(e) => setLabel(e.target.value)}
-          className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400"
+          className="w-full px-3 py-3 text-base border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"
         />
 
-        <div>
-          <label className="block text-xs text-gray-500 mb-1">
-            X オフセット: <span className="font-medium text-gray-700">{xOffset}px</span>
-          </label>
+        <div className="bg-white border border-gray-200 rounded-xl px-3 py-2">
+          <div className="flex items-center justify-between mb-1">
+            <label className="text-xs text-gray-500">X オフセット（矢印位置）</label>
+            <span className="text-xs font-medium text-gray-700">{xOffset}px</span>
+          </div>
           <input
             type="range"
             min={-200}
             max={300}
             value={xOffset}
             onChange={(e) => setXOffset(Number(e.target.value))}
-            className="w-full accent-blue-600"
+            className="w-full accent-blue-600 h-5"
           />
         </div>
 
         <div className="flex gap-2">
           <button
             type="submit"
-            className="flex-1 py-1.5 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
+            className="flex-1 py-3 text-base font-medium bg-blue-600 text-white rounded-xl active:bg-blue-700"
           >
             {editingId ? '更新' : '追加'}
           </button>
@@ -133,7 +136,7 @@ const TransitionForm: React.FC<Props> = ({ levels, transitions, onAdd, onUpdate,
             <button
               type="button"
               onClick={resetForm}
-              className="px-4 py-1.5 text-sm bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 transition-colors"
+              className="px-5 py-3 text-base bg-gray-200 text-gray-700 rounded-xl active:bg-gray-300"
             >
               キャンセル
             </button>
@@ -141,40 +144,39 @@ const TransitionForm: React.FC<Props> = ({ levels, transitions, onAdd, onUpdate,
         </div>
       </form>
 
-      <div className="space-y-1.5">
+      <div className="space-y-2">
         {transitions.map((tr) => {
           const arrowType = getArrowType(tr);
           return (
             <div
               key={tr.id}
-              className="flex items-center justify-between px-3 py-2 bg-gray-50 border border-gray-200 rounded-md text-sm"
+              className="flex items-center justify-between px-3 py-3 bg-white border border-gray-200 rounded-xl"
             >
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
                   {arrowType && (
-                    <span className={`text-xs font-semibold ${arrowType.cls}`}>
+                    <span className={`text-xs font-bold ${arrowType.cls}`}>
                       {arrowType.label}
                     </span>
                   )}
                   {tr.label && (
-                    <span className="text-gray-700 font-medium truncate">{tr.label}</span>
+                    <span className="text-gray-800 text-sm font-medium truncate">{tr.label}</span>
                   )}
                 </div>
-                <p className="text-xs text-gray-500 truncate mt-0.5">
+                <p className="text-xs text-gray-400 truncate mt-0.5">
                   {getLevelName(tr.fromLevelId)} → {getLevelName(tr.toLevelId)}
                 </p>
-                <p className="text-xs text-gray-400">オフセット: {tr.xOffset}px</p>
               </div>
-              <div className="flex gap-1 ml-2 shrink-0">
+              <div className="flex gap-2 ml-3 shrink-0">
                 <button
                   onClick={() => handleEdit(tr)}
-                  className="px-2 py-1 text-xs bg-amber-100 text-amber-700 rounded hover:bg-amber-200 transition-colors"
+                  className="px-3 py-1.5 text-sm bg-amber-100 text-amber-700 rounded-lg active:bg-amber-200"
                 >
                   編集
                 </button>
                 <button
                   onClick={() => onDelete(tr.id)}
-                  className="px-2 py-1 text-xs bg-red-100 text-red-600 rounded hover:bg-red-200 transition-colors"
+                  className="px-3 py-1.5 text-sm bg-red-100 text-red-600 rounded-lg active:bg-red-200"
                 >
                   削除
                 </button>
@@ -183,7 +185,7 @@ const TransitionForm: React.FC<Props> = ({ levels, transitions, onAdd, onUpdate,
           );
         })}
         {transitions.length === 0 && (
-          <p className="text-gray-400 text-sm text-center py-3">遷移がありません</p>
+          <p className="text-gray-400 text-sm text-center py-4">遷移がありません</p>
         )}
       </div>
     </div>
