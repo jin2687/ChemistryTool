@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import { useMemo, forwardRef } from 'react';
 import type { Level, Transition } from '../types';
 
 interface Props {
@@ -6,7 +6,6 @@ interface Props {
   transitions: Transition[];
 }
 
-// Landscape viewBox optimized for mobile bottom pane
 const SVG_WIDTH = 600;
 const SVG_HEIGHT = 340;
 const MARGIN = { top: 28, right: 20, bottom: 20, left: 64 };
@@ -14,6 +13,8 @@ const PLOT_HEIGHT = SVG_HEIGHT - MARGIN.top - MARGIN.bottom;
 const LEVEL_LINE_WIDTH = 110;
 const LEVEL_LINE_X = MARGIN.left + 16;
 const ARROW_BASE_X = LEVEL_LINE_X + LEVEL_LINE_WIDTH / 2 + 8;
+const LABEL_MIN_GAP = 13; // px, minimum gap between adjacent level labels
+const TRANS_LABEL_MIN_GAP = 11;
 
 function energyToY(energy: number, minE: number, maxE: number): number {
   if (maxE === minE) return MARGIN.top + PLOT_HEIGHT / 2;
@@ -21,13 +22,40 @@ function energyToY(energy: number, minE: number, maxE: number): number {
   return MARGIN.top + PLOT_HEIGHT * (1 - ratio);
 }
 
-const EnergyDiagram: React.FC<Props> = ({ levels, transitions }) => {
+/** Push overlapping items apart until stable or max iterations reached. */
+function resolveCollisions(
+  items: { id: string; y: number }[],
+  minGap: number
+): Map<string, number> {
+  const arr = items.map((it) => ({ ...it }));
+  arr.sort((a, b) => a.y - b.y);
+
+  for (let iter = 0; iter < 40; iter++) {
+    let stable = true;
+    for (let k = 0; k < arr.length - 1; k++) {
+      const gap = arr[k + 1].y - arr[k].y;
+      if (gap < minGap) {
+        const push = (minGap - gap) / 2;
+        arr[k].y -= push;
+        arr[k + 1].y += push;
+        stable = false;
+      }
+    }
+    if (stable) break;
+  }
+
+  const map = new Map<string, number>();
+  arr.forEach(({ id, y }) => map.set(id, y));
+  return map;
+}
+
+const EnergyDiagram = forwardRef<SVGSVGElement, Props>(({ levels, transitions }, ref) => {
   const { minE, maxE } = useMemo(() => {
     if (levels.length === 0) return { minE: 0, maxE: 100 };
     const energies = levels.map((l) => l.energy);
     const min = Math.min(...energies);
     const max = Math.max(...energies);
-    const padding = (max - min) * 0.12 || 40;
+    const padding = (max - min) * 0.14 || 40;
     return { minE: min - padding, maxE: max + padding };
   }, [levels]);
 
@@ -37,8 +65,31 @@ const EnergyDiagram: React.FC<Props> = ({ levels, transitions }) => {
     return map;
   }, [levels]);
 
+  /** Adjusted label Y positions for level labels (avoid overlap). */
+  const levelLabelYs = useMemo(() => {
+    const items = levels.map((l) => ({
+      id: l.id,
+      y: energyToY(l.energy, minE, maxE) - 5,
+    }));
+    return resolveCollisions(items, LABEL_MIN_GAP);
+  }, [levels, minE, maxE]);
+
+  /** Adjusted label Y positions for transition labels (avoid overlap). */
+  const transLabelYs = useMemo(() => {
+    const items = transitions.map((tr) => {
+      const from = levelMap.get(tr.fromLevelId);
+      const to = levelMap.get(tr.toLevelId);
+      if (!from || !to) return { id: tr.id, y: SVG_HEIGHT / 2 };
+      const y1 = energyToY(from.energy, minE, maxE);
+      const y2 = energyToY(to.energy, minE, maxE);
+      return { id: tr.id, y: (y1 + y2) / 2 };
+    });
+    return resolveCollisions(items, TRANS_LABEL_MIN_GAP);
+  }, [transitions, levelMap, minE, maxE]);
+
   return (
     <svg
+      ref={ref}
       viewBox={`0 0 ${SVG_WIDTH} ${SVG_HEIGHT}`}
       width="100%"
       height="100%"
@@ -56,12 +107,10 @@ const EnergyDiagram: React.FC<Props> = ({ levels, transitions }) => {
         stroke="#374151"
         strokeWidth={1.5}
       />
-      {/* Arrow head */}
       <polygon
         points={`${MARGIN.left - 4},${MARGIN.top - 8} ${MARGIN.left + 4},${MARGIN.top - 8} ${MARGIN.left},${MARGIN.top - 16}`}
         fill="#374151"
       />
-      {/* E label */}
       <text
         x={MARGIN.left}
         y={MARGIN.top - 18}
@@ -74,7 +123,7 @@ const EnergyDiagram: React.FC<Props> = ({ levels, transitions }) => {
         E
       </text>
 
-      {/* Tick marks + energy labels */}
+      {/* Tick marks + energy axis labels */}
       {levels.map((level) => {
         const y = energyToY(level.energy, minE, maxE);
         return (
@@ -100,22 +149,35 @@ const EnergyDiagram: React.FC<Props> = ({ levels, transitions }) => {
         );
       })}
 
-      {/* Level lines */}
+      {/* Level lines + labels (labels use collision-resolved Y) */}
       {levels.map((level) => {
-        const y = energyToY(level.energy, minE, maxE);
+        const lineY = energyToY(level.energy, minE, maxE);
+        const labelY = levelLabelYs.get(level.id) ?? lineY - 5;
         return (
           <g key={`level-${level.id}`}>
+            {/* Dotted connector from line to label when they diverge */}
+            {Math.abs(labelY - (lineY - 5)) > 2 && (
+              <line
+                x1={LEVEL_LINE_X}
+                y1={lineY}
+                x2={LEVEL_LINE_X - 2}
+                y2={labelY + 3}
+                stroke="#93c5fd"
+                strokeWidth={0.8}
+                strokeDasharray="2,2"
+              />
+            )}
             <line
               x1={LEVEL_LINE_X}
-              y1={y}
+              y1={lineY}
               x2={LEVEL_LINE_X + LEVEL_LINE_WIDTH}
-              y2={y}
+              y2={lineY}
               stroke="#1e40af"
               strokeWidth={2}
             />
             <text
               x={LEVEL_LINE_X - 4}
-              y={y - 4}
+              y={labelY}
               textAnchor="end"
               fontSize={9}
               fill="#1e293b"
@@ -136,10 +198,9 @@ const EnergyDiagram: React.FC<Props> = ({ levels, transitions }) => {
         const y1 = energyToY(fromLevel.energy, minE, maxE);
         const y2 = energyToY(toLevel.energy, minE, maxE);
         const x = ARROW_BASE_X + tr.xOffset;
-
         const isEndothermic = toLevel.energy > fromLevel.energy;
         const color = isEndothermic ? '#2563eb' : '#dc2626';
-        const midY = (y1 + y2) / 2;
+        const labelY = transLabelYs.get(tr.id) ?? (y1 + y2) / 2;
 
         return (
           <g key={`tr-${tr.id}`}>
@@ -169,20 +230,24 @@ const EnergyDiagram: React.FC<Props> = ({ levels, transitions }) => {
               strokeWidth={1.5}
               markerEnd={`url(#arrow-${tr.id})`}
             />
-            <text
-              x={x + 6}
-              y={midY + 3.5}
-              fontSize={8.5}
-              fill={color}
-              fontFamily="system-ui, sans-serif"
-            >
-              {tr.label}
-            </text>
+            {tr.label && (
+              <text
+                x={x + 6}
+                y={labelY + 3.5}
+                fontSize={8.5}
+                fill={color}
+                fontFamily="system-ui, sans-serif"
+              >
+                {tr.label}
+              </text>
+            )}
           </g>
         );
       })}
     </svg>
   );
-};
+});
+
+EnergyDiagram.displayName = 'EnergyDiagram';
 
 export default EnergyDiagram;
