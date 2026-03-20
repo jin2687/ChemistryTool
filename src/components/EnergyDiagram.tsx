@@ -6,43 +6,62 @@ interface Props {
   transitions: Transition[];
 }
 
-const SVG_WIDTH = 600;
-const SVG_HEIGHT = 340;
-const MARGIN = { top: 28, right: 20, bottom: 20, left: 64 };
-const PLOT_HEIGHT = SVG_HEIGHT - MARGIN.top - MARGIN.bottom;
-const LEVEL_LINE_WIDTH = 110;
-const LEVEL_LINE_X = MARGIN.left + 16;
-const ARROW_BASE_X = LEVEL_LINE_X + LEVEL_LINE_WIDTH / 2 + 8;
-const LABEL_MIN_GAP = 13; // px, minimum gap between adjacent level labels
-const TRANS_LABEL_MIN_GAP = 11;
+// ── Layout constants ──────────────────────────────────────────────────────────
+const SVG_W = 600;
+const SVG_H = 340;
+const MT = 32;          // margin top
+const MB = 20;          // margin bottom
+const ML = 44;          // margin left  (Y-axis + tick values)
+const PH = SVG_H - MT - MB; // plot height
 
-function energyToY(energy: number, minE: number, maxE: number): number {
-  if (maxE === minE) return MARGIN.top + PLOT_HEIGHT / 2;
-  const ratio = (energy - minE) / (maxE - minE);
-  return MARGIN.top + PLOT_HEIGHT * (1 - ratio);
+const LINE_X1 = ML + 10;        // level line left  x = 54
+const LINE_X2 = LINE_X1 + 96;   // level line right x = 150
+const LABEL_X = LINE_X2 + 6;    // label starts at x = 156 (right of line)
+
+const FONT_SIZE = 9;
+// Estimated text bounding box height = fontSize * 1.4 ≈ 12.6 px
+const LABEL_H  = FONT_SIZE * 1.4;
+const LABEL_GAP = LABEL_H + 2;  // min gap between label baselines ≈ 14.6 px
+
+const ARROW_CX = 340;  // default arrow center x
+const AW = 5;           // arrowhead half-width
+const AH = 7;           // arrowhead height
+// ─────────────────────────────────────────────────────────────────────────────
+
+function eToY(energy: number, minE: number, maxE: number): number {
+  if (maxE === minE) return MT + PH / 2;
+  return MT + PH * (1 - (energy - minE) / (maxE - minE));
 }
 
-/** Push overlapping items apart until stable or max iterations reached. */
+/**
+ * Iteratively push overlapping items apart (symmetric).
+ * Items are the TEXT BASELINE Y positions.
+ */
 function resolveCollisions(
-  items: { id: string; y: number }[],
-  minGap: number
+  raw: Array<{ id: string; y: number }>,
+  gap: number,
 ): Map<string, number> {
-  const arr = items.map((it) => ({ ...it }));
+  const arr = raw.map(it => ({ ...it }));
   arr.sort((a, b) => a.y - b.y);
 
-  for (let iter = 0; iter < 40; iter++) {
+  for (let pass = 0; pass < 60; pass++) {
     let stable = true;
     for (let k = 0; k < arr.length - 1; k++) {
-      const gap = arr[k + 1].y - arr[k].y;
-      if (gap < minGap) {
-        const push = (minGap - gap) / 2;
-        arr[k].y -= push;
-        arr[k + 1].y += push;
+      const overlap = gap - (arr[k + 1].y - arr[k].y);
+      if (overlap > 0.1) {
+        const half = overlap / 2;
+        arr[k].y -= half;
+        arr[k + 1].y += half;
         stable = false;
       }
     }
     if (stable) break;
   }
+
+  // Clamp within SVG bounds
+  arr.forEach(it => {
+    it.y = Math.max(MT + LABEL_H, Math.min(SVG_H - MB, it.y));
+  });
 
   const map = new Map<string, number>();
   arr.forEach(({ id, y }) => map.set(id, y));
@@ -50,136 +69,107 @@ function resolveCollisions(
 }
 
 const EnergyDiagram = forwardRef<SVGSVGElement, Props>(({ levels, transitions }, ref) => {
+  // ── Energy range with padding ──
   const { minE, maxE } = useMemo(() => {
     if (levels.length === 0) return { minE: 0, maxE: 100 };
-    const energies = levels.map((l) => l.energy);
-    const min = Math.min(...energies);
-    const max = Math.max(...energies);
-    const padding = (max - min) * 0.14 || 40;
-    return { minE: min - padding, maxE: max + padding };
+    const es = levels.map(l => l.energy);
+    const lo = Math.min(...es);
+    const hi = Math.max(...es);
+    const pad = (hi - lo) * 0.15 || 40;
+    return { minE: lo - pad, maxE: hi + pad };
   }, [levels]);
 
   const levelMap = useMemo(() => {
-    const map = new Map<string, Level>();
-    levels.forEach((l) => map.set(l.id, l));
-    return map;
+    const m = new Map<string, Level>();
+    levels.forEach(l => m.set(l.id, l));
+    return m;
   }, [levels]);
 
-  /** Adjusted label Y positions for level labels (avoid overlap). */
+  // ── Collision-resolved label Y (baseline) for level labels ──
+  // Initial position: vertically centred on the level line.
+  //   text centre  ≈ baseline − FONT_SIZE * 0.35
+  //   → baseline   = lineY + FONT_SIZE * 0.35
   const levelLabelYs = useMemo(() => {
-    const items = levels.map((l) => ({
+    const items = levels.map(l => ({
       id: l.id,
-      y: energyToY(l.energy, minE, maxE) - 5,
+      y: eToY(l.energy, minE, maxE) + FONT_SIZE * 0.35,
     }));
-    return resolveCollisions(items, LABEL_MIN_GAP);
+    return resolveCollisions(items, LABEL_GAP);
   }, [levels, minE, maxE]);
 
-  /** Adjusted label Y positions for transition labels (avoid overlap). */
+  // ── Collision-resolved label Y for transition labels ──
   const transLabelYs = useMemo(() => {
-    const items = transitions.map((tr) => {
-      const from = levelMap.get(tr.fromLevelId);
-      const to = levelMap.get(tr.toLevelId);
-      if (!from || !to) return { id: tr.id, y: SVG_HEIGHT / 2 };
-      const y1 = energyToY(from.energy, minE, maxE);
-      const y2 = energyToY(to.energy, minE, maxE);
-      return { id: tr.id, y: (y1 + y2) / 2 };
+    const items = transitions.map(tr => {
+      const f = levelMap.get(tr.fromLevelId);
+      const t = levelMap.get(tr.toLevelId);
+      const midY = f && t
+        ? (eToY(f.energy, minE, maxE) + eToY(t.energy, minE, maxE)) / 2
+        : SVG_H / 2;
+      return { id: tr.id, y: midY + FONT_SIZE * 0.35 };
     });
-    return resolveCollisions(items, TRANS_LABEL_MIN_GAP);
+    return resolveCollisions(items, LABEL_GAP);
   }, [transitions, levelMap, minE, maxE]);
 
   return (
     <svg
       ref={ref}
-      viewBox={`0 0 ${SVG_WIDTH} ${SVG_HEIGHT}`}
+      viewBox={`0 0 ${SVG_W} ${SVG_H}`}
       width="100%"
       height="100%"
       preserveAspectRatio="xMidYMid meet"
       style={{ display: 'block' }}
     >
-      <rect width={SVG_WIDTH} height={SVG_HEIGHT} fill="white" />
+      <rect width={SVG_W} height={SVG_H} fill="white" />
 
-      {/* Y-axis */}
-      <line
-        x1={MARGIN.left}
-        y1={MARGIN.top - 8}
-        x2={MARGIN.left}
-        y2={MARGIN.top + PLOT_HEIGHT + 8}
-        stroke="#374151"
-        strokeWidth={1.5}
-      />
+      {/* ── Y-axis ── */}
+      <line x1={ML} y1={MT - 8} x2={ML} y2={MT + PH + 6} stroke="#374151" strokeWidth={1.5} />
       <polygon
-        points={`${MARGIN.left - 4},${MARGIN.top - 8} ${MARGIN.left + 4},${MARGIN.top - 8} ${MARGIN.left},${MARGIN.top - 16}`}
+        points={`${ML - 4},${MT - 8} ${ML + 4},${MT - 8} ${ML},${MT - 18}`}
         fill="#374151"
       />
-      <text
-        x={MARGIN.left}
-        y={MARGIN.top - 18}
-        textAnchor="middle"
-        fontSize={14}
-        fontWeight="bold"
-        fill="#374151"
-        fontStyle="italic"
-      >
-        E
-      </text>
+      <text x={ML} y={MT - 20} textAnchor="middle" fontSize={13} fontWeight="bold"
+        fill="#374151" fontStyle="italic">E</text>
 
-      {/* Tick marks + energy axis labels */}
-      {levels.map((level) => {
-        const y = energyToY(level.energy, minE, maxE);
+      {/* ── Axis tick marks (energy values on Y-axis) ── */}
+      {levels.map(level => {
+        const y = eToY(level.energy, minE, maxE);
         return (
           <g key={`tick-${level.id}`}>
-            <line
-              x1={MARGIN.left - 4}
-              y1={y}
-              x2={MARGIN.left}
-              y2={y}
-              stroke="#9ca3af"
-              strokeWidth={1}
-            />
-            <text
-              x={MARGIN.left - 6}
-              y={y + 3.5}
-              textAnchor="end"
-              fontSize={8}
-              fill="#9ca3af"
-            >
+            <line x1={ML - 4} y1={y} x2={ML} y2={y} stroke="#9ca3af" strokeWidth={1} />
+            <text x={ML - 6} y={y + 3.5} textAnchor="end" fontSize={7.5} fill="#9ca3af">
               {level.energy}
             </text>
           </g>
         );
       })}
 
-      {/* Level lines + labels (labels use collision-resolved Y) */}
-      {levels.map((level) => {
-        const lineY = energyToY(level.energy, minE, maxE);
-        const labelY = levelLabelYs.get(level.id) ?? lineY - 5;
+      {/* ── Level lines + labels (label RIGHT of line, collision-resolved) ── */}
+      {levels.map(level => {
+        const lineY  = eToY(level.energy, minE, maxE);
+        const labelY = levelLabelYs.get(level.id) ?? lineY + FONT_SIZE * 0.35;
+        // Draw a small dashed leader only when pushed > half a text-height away
+        const drift  = Math.abs(labelY - (lineY + FONT_SIZE * 0.35));
         return (
           <g key={`level-${level.id}`}>
-            {/* Dotted connector from line to label when they diverge */}
-            {Math.abs(labelY - (lineY - 5)) > 2 && (
+            {/* Dashed leader from right end of line to label */}
+            {drift > FONT_SIZE * 0.7 && (
               <line
-                x1={LEVEL_LINE_X}
-                y1={lineY}
-                x2={LEVEL_LINE_X - 2}
-                y2={labelY + 3}
-                stroke="#93c5fd"
+                x1={LINE_X2}      y1={lineY}
+                x2={LABEL_X - 1}  y2={labelY - FONT_SIZE * 0.35}
+                stroke="#bfdbfe"
                 strokeWidth={0.8}
-                strokeDasharray="2,2"
+                strokeDasharray="3,2"
               />
             )}
-            <line
-              x1={LEVEL_LINE_X}
-              y1={lineY}
-              x2={LEVEL_LINE_X + LEVEL_LINE_WIDTH}
-              y2={lineY}
-              stroke="#1e40af"
-              strokeWidth={2}
-            />
+            {/* Horizontal level line */}
+            <line x1={LINE_X1} y1={lineY} x2={LINE_X2} y2={lineY}
+              stroke="#1e40af" strokeWidth={2.2} strokeLinecap="round" />
+            {/* Label – right of the line, vertically centred */}
             <text
-              x={LEVEL_LINE_X - 4}
+              x={LABEL_X}
               y={labelY}
-              textAnchor="end"
-              fontSize={9}
+              textAnchor="start"
+              fontSize={FONT_SIZE}
               fill="#1e293b"
               fontFamily="system-ui, sans-serif"
             >
@@ -189,52 +179,46 @@ const EnergyDiagram = forwardRef<SVGSVGElement, Props>(({ levels, transitions },
         );
       })}
 
-      {/* Transitions */}
-      {transitions.map((tr) => {
-        const fromLevel = levelMap.get(tr.fromLevelId);
-        const toLevel = levelMap.get(tr.toLevelId);
-        if (!fromLevel || !toLevel) return null;
+      {/* ── Transitions (manual arrowheads – no SVG markers) ── */}
+      {transitions.map(tr => {
+        const fromLv = levelMap.get(tr.fromLevelId);
+        const toLv   = levelMap.get(tr.toLevelId);
+        if (!fromLv || !toLv) return null;
 
-        const y1 = energyToY(fromLevel.energy, minE, maxE);
-        const y2 = energyToY(toLevel.energy, minE, maxE);
-        const x = ARROW_BASE_X + tr.xOffset;
-        const isEndothermic = toLevel.energy > fromLevel.energy;
-        const color = isEndothermic ? '#2563eb' : '#dc2626';
-        const labelY = transLabelYs.get(tr.id) ?? (y1 + y2) / 2;
+        const y1   = eToY(fromLv.energy, minE, maxE);
+        const y2   = eToY(toLv.energy,   minE, maxE);
+        const cx   = ARROW_CX + tr.xOffset;
+        const isUp = toLv.energy > fromLv.energy; // endothermic → arrow UP
+        const color = isUp ? '#2563eb' : '#dc2626';
+        const labelY = transLabelYs.get(tr.id) ?? (y1 + y2) / 2 + FONT_SIZE * 0.35;
+
+        // Arrowhead tip is at y2; base is AH pixels back along the shaft
+        const tipY  = y2;
+        const baseY = isUp ? tipY + AH : tipY - AH;
 
         return (
           <g key={`tr-${tr.id}`}>
-            <defs>
-              <marker
-                id={`arrow-${tr.id}`}
-                markerWidth={7}
-                markerHeight={7}
-                refX={3.5}
-                refY={3.5}
-                orient="auto"
-              >
-                <path
-                  d={isEndothermic ? 'M0,7 L3.5,0 L7,7' : 'M0,0 L3.5,7 L7,0'}
-                  fill="none"
-                  stroke={color}
-                  strokeWidth={1.5}
-                />
-              </marker>
-            </defs>
+            {/* Shaft (stops at arrowhead base, not tip) */}
             <line
-              x1={x}
-              y1={y1}
-              x2={x}
-              y2={y2}
-              stroke={color}
-              strokeWidth={1.5}
-              markerEnd={`url(#arrow-${tr.id})`}
+              x1={cx} y1={y1}
+              x2={cx} y2={baseY}
+              stroke={color} strokeWidth={1.6}
             />
+            {/* Arrowhead – open V, manually drawn */}
+            <polyline
+              points={`${cx - AW},${baseY} ${cx},${tipY} ${cx + AW},${baseY}`}
+              fill="none"
+              stroke={color}
+              strokeWidth={1.6}
+              strokeLinejoin="round"
+              strokeLinecap="round"
+            />
+            {/* Transition label */}
             {tr.label && (
               <text
-                x={x + 6}
-                y={labelY + 3.5}
-                fontSize={8.5}
+                x={cx + AW + 4}
+                y={labelY}
+                fontSize={FONT_SIZE}
                 fill={color}
                 fontFamily="system-ui, sans-serif"
               >
@@ -249,5 +233,4 @@ const EnergyDiagram = forwardRef<SVGSVGElement, Props>(({ levels, transitions },
 });
 
 EnergyDiagram.displayName = 'EnergyDiagram';
-
 export default EnergyDiagram;
