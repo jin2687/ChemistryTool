@@ -117,8 +117,8 @@ const TransitionForm: React.FC<Props> = ({ levels, transitions, onAdd, onUpdate,
           </div>
           <input
             type="range"
-            min={-200}
-            max={300}
+            min={-100}
+            max={280}
             value={xOffset}
             onChange={(e) => setXOffset(Number(e.target.value))}
             className="w-full accent-blue-600 h-5"
