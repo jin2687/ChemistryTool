@@ -35,7 +35,7 @@ const AH        = 7;                 // arrowhead height
 // Forbidden zone around each level line for label baselines:
 //   baseline must be ≤ lineY - PIN_ABOVE  (text sits above the line), OR
 //   baseline must be ≥ lineY + PIN_BELOW  (text sits below the line)
-const PIN_ABOVE = 2;        // px above line
+const PIN_ABOVE = 4;        // px above line
 const PIN_BELOW = FS + 3;   // px below line (glyph top clears the line)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -269,27 +269,44 @@ const EnergyDiagram = forwardRef<SVGSVGElement, Props>(({ levels, transitions },
 
   // ── Phase 3: Transition label placement ──────────────────────────────────────
   //
-  // 3a. Determine X side (right preferred, left fallback).
-  //     "Right blocked" if:
-  //       • right edge would reach state-label column, OR
-  //       • another arrow shaft passes through the label's horizontal span at
-  //         the label's ARROW midpoint Y.
-  //     Same check for left side.  If both blocked, default to right.
+  // 3a. Initial X-side selection (right preferred, left if right is blocked).
+  //     A side is "blocked" if another arrow shaft's x falls within the label's
+  //     horizontal span at the arrow's midpoint Y.
+  //     Left side is also rejected when the label text is too wide to fit left
+  //     of the shaft without overflowing into it.
   //
-  // 3b. Determine Y position via resolveLabels (level-line avoidance +
-  //     X-overlap-aware inter-label separation).
+  // 3b. resolveLabels: adjust all label Y positions so that:
+  //       • no label baseline sits inside a level-line forbidden zone, and
+  //       • X-overlapping label pairs are at least LABEL_GAP apart in Y.
+  //
+  // 3c. Post-resolution verification: recheck each label's ACTUAL bounding box
+  //     [x, x+lw] × [y−LABEL_H, y+2] against every other arrow shaft.
+  //     If a shaft still crosses the label, flip to the other side and re-run
+  //     resolveLabels.  Repeat up to 4 rounds until stable.
   const transLabelPositions = useMemo(() => {
-    // Build shaft registry
+    // Shaft registry: {id, x, y1, y2, yMin, yMax}
     const shafts = transitions.flatMap(tr => {
       const x = arrowXs.get(tr.id);
       const r = arrowRanges.get(tr.id);
       return x != null && r != null ? [{ id: tr.id, x, ...r }] : [];
     });
 
-    // 3a — decide X side for each label
-    type LabelDraft = { id: string; x: number; lw: number; y: number };
-    const drafts: LabelDraft[] = [];
+    /** True if another shaft's x lands inside [lx, lx+lw] AND its Y range
+     *  overlaps the label's Y band [labelTop, labelBot]. */
+    function crossesShaft(
+      ownId: string, lx: number, lw: number, labelTop: number, labelBot: number,
+    ): boolean {
+      return shafts.some(s =>
+        s.id !== ownId &&
+        s.x > lx && s.x < lx + lw &&
+        s.yMax > labelTop && s.yMin < labelBot,
+      );
+    }
 
+    type LabelDraft = { id: string; x: number; lw: number; y: number };
+
+    // 3a — initial X-side selection
+    const drafts: LabelDraft[] = [];
     for (const tr of transitions) {
       if (!tr.label) continue;
       const cx = arrowXs.get(tr.id);
@@ -310,25 +327,72 @@ const EnergyDiagram = forwardRef<SVGSVGElement, Props>(({ levels, transitions },
           midY > s.yMin && midY < s.yMax,
         );
 
-      // Left-side candidate
+      // Left-side candidate (must fit entirely left of own shaft)
       const lxEnd = cx - AW - 4;
       const lx    = Math.max(LINE_X1 + 2, lxEnd - lw);
       const leftOk =
-        lx + lw <= cx - AW - 2 &&   // label actually fits left of own shaft
+        lx + lw <= cx - AW - 2 &&
         !shafts.some(s =>
           s.id !== tr.id &&
           s.x > lx && s.x < lx + lw &&
           midY > s.yMin && midY < s.yMax,
         );
 
-      const chosenX = rightOk ? rx : leftOk ? lx : rx; // prefer right, then left, else right
-
+      const chosenX = rightOk ? rx : leftOk ? lx : rx;
       drafts.push({ id: tr.id, x: chosenX, lw, y: midY + FS * 0.35 });
     }
 
-    // 3b — resolve label Y positions (all labels together, X-overlap-aware)
+    // 3b + 3c — resolve Y then verify against actual bounding boxes; repeat
     const levelPins = Array.from(levelYs.values());
-    const resolved  = resolveLabels(drafts, levelPins, LABEL_GAP);
+    let resolved    = resolveLabels(drafts, levelPins, LABEL_GAP);
+
+    for (let round = 0; round < 4; round++) {
+      let anyChanged = false;
+
+      for (let i = 0; i < drafts.length; i++) {
+        const d  = drafts[i];
+        const tr = transitions.find(t => t.id === d.id);
+        if (!tr) continue;
+        const cx = arrowXs.get(tr.id);
+        if (cx == null) continue;
+
+        const fy  = resolved.get(d.id) ?? d.y;
+        const top = fy - LABEL_H;
+        const bot = fy + 2;
+
+        if (!crossesShaft(d.id, d.x, d.lw, top, bot)) continue;
+
+        // A shaft crosses the label at its resolved Y — try the other side
+        const isRight = d.x >= cx;
+        let newX = d.x;
+
+        if (isRight) {
+          // Try left
+          const lxEnd2 = cx - AW - 4;
+          const lx2    = Math.max(LINE_X1 + 2, lxEnd2 - d.lw);
+          if (lx2 + d.lw <= cx - AW - 2 &&
+              !crossesShaft(d.id, lx2, d.lw, top, bot)) {
+            newX = lx2;
+          }
+        } else {
+          // Try right
+          const rx2    = cx + AW + 4;
+          const rxEnd2 = rx2 + d.lw;
+          if (rxEnd2 < LABEL_X - 4 &&
+              !crossesShaft(d.id, rx2, d.lw, top, bot)) {
+            newX = rx2;
+          }
+        }
+
+        if (newX !== d.x) {
+          drafts[i] = { ...d, x: newX, y: fy };
+          anyChanged = true;
+        }
+      }
+
+      if (!anyChanged) break;
+      resolved = resolveLabels(drafts, levelPins, LABEL_GAP);
+    }
 
     const result = new Map<string, { x: number; y: number }>();
     drafts.forEach(d => {
