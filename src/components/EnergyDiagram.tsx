@@ -20,7 +20,7 @@ const LABEL_X = LINE_X2 + 7;        // 431 — state label left edge
 
 // Arrow columns: ARROW_BASE_X is the x of column 0, each column is SLOT_W apart
 const ARROW_BASE_X = LINE_X1 + 96;  // ≈ 142
-const SLOT_W       = 34;
+const SLOT_W       = 40;
 
 // Minimum vertical gap enforced between adjacent level lines
 const MIN_LEVEL_GAP = 44;
@@ -314,9 +314,10 @@ const EnergyDiagram = forwardRef<SVGSVGElement, Props>(({ levels, transitions },
       const lxEnd = cx - AW - 4;
       const lx    = Math.max(LINE_X1 + 2, lxEnd - lw);
       const leftOk =
+        lx + lw <= cx - AW - 2 &&   // label actually fits left of own shaft
         !shafts.some(s =>
           s.id !== tr.id &&
-          s.x > lx && s.x < lxEnd &&
+          s.x > lx && s.x < lx + lw &&
           midY > s.yMin && midY < s.yMax,
         );
 
