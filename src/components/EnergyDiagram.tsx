@@ -81,6 +81,62 @@ function resolveYCollisions(
   return m;
 }
 
+/**
+ * Like resolveYCollisions, but also pushes label baselines away from
+ * horizontal level lines (pins).  A baseline `y` must satisfy either
+ *   y ≤ pin − PIN_ABOVE   (text sits above the line)
+ *   y ≥ pin + PIN_BELOW   (text sits below the line)
+ * where PIN_ABOVE keeps a small top-gap and PIN_BELOW ensures the glyph
+ * body (extending upward from the baseline by ~FS px) clears the line.
+ */
+const PIN_ABOVE = 2;        // px clearance: baseline above line
+const PIN_BELOW = FS + 3;   // px clearance: baseline below line (glyph clears)
+
+function resolveYWithPins(
+  raw: Array<{ id: string; y: number }>,
+  pins: number[],
+  gap: number,
+  topBound = MT + LABEL_H,
+  botBound = SVG_H - MB,
+): Map<string, number> {
+  const arr = raw.map(it => ({ ...it }));
+  for (let pass = 0; pass < 200; pass++) {
+    arr.sort((a, b) => a.y - b.y);
+    let stable = true;
+
+    // 1. Push away from level-line pins
+    for (const item of arr) {
+      for (const pin of pins) {
+        if (item.y > pin - PIN_ABOVE && item.y < pin + PIN_BELOW) {
+          // Move to the nearer safe edge
+          const toAbove = item.y - (pin - PIN_ABOVE);
+          const toBelow = (pin + PIN_BELOW) - item.y;
+          item.y = toAbove <= toBelow ? pin - PIN_ABOVE : pin + PIN_BELOW;
+          stable = false;
+        }
+      }
+    }
+
+    // 2. Push labels apart from each other
+    arr.sort((a, b) => a.y - b.y);
+    for (let k = 0; k < arr.length - 1; k++) {
+      const d = arr[k + 1].y - arr[k].y;
+      if (d < gap - 0.1) {
+        const half = (gap - d) / 2;
+        arr[k].y     -= half;
+        arr[k + 1].y += half;
+        stable = false;
+      }
+    }
+
+    if (stable) break;
+  }
+  arr.forEach(it => { it.y = Math.max(topBound, Math.min(botBound, it.y)); });
+  const m = new Map<string, number>();
+  arr.forEach(({ id, y }) => m.set(id, y));
+  return m;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 const EnergyDiagram = forwardRef<SVGSVGElement, Props>(({ levels, transitions }, ref) => {
@@ -212,10 +268,13 @@ const EnergyDiagram = forwardRef<SVGSVGElement, Props>(({ levels, transitions },
       labels.push({ id: tr.id, x: lx, y: midY + FS * 0.35, side });
     }
 
-    // Resolve Y collisions within each side independently
+    // Collect level-line Y positions: labels must not overlap these
+    const levelPins = Array.from(levelYs.values());
+
+    // Resolve Y collisions, also avoiding level lines (pins)
     const resolve = (side: 'right' | 'left') => {
       const items = labels.filter(l => l.side === side).map(l => ({ id: l.id, y: l.y }));
-      return resolveYCollisions(items, LABEL_GAP);
+      return resolveYWithPins(items, levelPins, LABEL_GAP);
     };
     const rightYs = resolve('right');
     const leftYs  = resolve('left');
@@ -226,7 +285,7 @@ const EnergyDiagram = forwardRef<SVGSVGElement, Props>(({ levels, transitions },
       result.set(l.id, { x: l.x, y: ry });
     });
     return result;
-  }, [transitions, arrowXs, arrowRanges]);
+  }, [transitions, arrowXs, arrowRanges, levelYs]);
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
