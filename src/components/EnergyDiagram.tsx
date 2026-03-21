@@ -6,61 +6,82 @@ interface Props {
   transitions: Transition[];
 }
 
-// ── Layout ────────────────────────────────────────────────────────────────────
-const SVG_W  = 600;
-const SVG_H  = 340;
-const ML     = 36;   // left margin (Y-axis)
-const MT     = 32;   // top margin
-const MB     = 24;   // bottom margin
-const PH     = SVG_H - MT - MB;
+// ── Layout constants ──────────────────────────────────────────────────────────
+const SVG_W = 600;
+const SVG_H = 340;
+const ML    = 36;   // left margin (Y-axis)
+const MT    = 32;   // top margin
+const MB    = 24;   // bottom margin
+const PH    = SVG_H - MT - MB;  // plot height = 284
 
-const LINE_X1      = ML + 10;              // 46  level line left
-const LINE_X2      = SVG_W - 16 - 160;    // 424 level line right
-const LABEL_X      = LINE_X2 + 7;         // 431 state label left edge
+const LINE_X1 = ML + 10;             // 46   — left edge of level lines
+const LINE_X2 = SVG_W - 16 - 160;   // 424  — right edge (160 px for state labels)
+const LABEL_X = LINE_X2 + 7;        // 431  — state label x
 
-// Arrow default x is ~30% into the line span; xOffset shifts from there
+// Arrow columns
 const ARROW_BASE_X = LINE_X1 + (LINE_X2 - LINE_X1) * 0.28; // ≈ 141
-const SLOT_W       = 38;  // pixels between auto-assigned arrow columns
-const SHAFT_TOL    = 8;   // px — two shafts within this distance are "same column"
+const SLOT_W       = 38;   // px between auto-separated arrow columns
+const SHAFT_TOL    = 8;    // two shafts within this distance are "same column"
 
-const FS      = 9;               // font size
-const LABEL_H = FS * 1.4;        // estimated text bounding-box height ≈ 12.6
-const LABEL_V_GAP = LABEL_H + 2; // min gap between baselines in same X-column ≈ 14.6
-const AW      = 5;               // arrowhead half-width
-const AH      = 7;               // arrowhead height
-const EST_CW  = FS * 0.58;       // estimated character width
+// Minimum vertical gap between adjacent level lines (keeps arrows readable)
+const MIN_LEVEL_GAP = 44;
+
+const FS        = 9;               // font size
+const LABEL_H   = FS * 1.4;       // ≈ 12.6 — estimated text height
+const LABEL_GAP = LABEL_H + 2;    // ≈ 14.6 — min gap between baselines
+const AW        = 5;               // arrowhead half-width
+const AH        = 7;               // arrowhead height
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** Map energy → SVG-Y (strictly proportional to energy). Used only as starting
+ *  point; level line positions are then spread to MIN_LEVEL_GAP. */
 function eToY(e: number, lo: number, hi: number): number {
   if (hi === lo) return MT + PH / 2;
   return MT + PH * (1 - (e - lo) / (hi - lo));
 }
 
-/** Push items apart vertically until no pair is closer than `gap`. */
+/** Estimate rendered text width, treating CJK characters as full-width. */
+function textWidth(s: string): number {
+  let w = 0;
+  for (const ch of s) {
+    // Hiragana, Katakana, CJK Unified Ideographs, fullwidth symbols, etc.
+    w += ch.charCodeAt(0) > 0x2FFF ? FS * 1.05 : FS * 0.62;
+  }
+  return w;
+}
+
+/**
+ * Push items apart vertically so no adjacent pair is closer than `gap`.
+ * Preserves order. Clamps to [topBound, botBound].
+ */
 function resolveYCollisions(
   raw: Array<{ id: string; y: number }>,
   gap: number,
+  topBound = MT + LABEL_H,
+  botBound = SVG_H - MB,
 ): Map<string, number> {
   const arr = raw.map(it => ({ ...it }));
   arr.sort((a, b) => a.y - b.y);
-  for (let pass = 0; pass < 60; pass++) {
+  for (let pass = 0; pass < 120; pass++) {
     let stable = true;
     for (let k = 0; k < arr.length - 1; k++) {
       const d = arr[k + 1].y - arr[k].y;
       if (d < gap - 0.1) {
         const half = (gap - d) / 2;
-        arr[k].y -= half;
+        arr[k].y     -= half;
         arr[k + 1].y += half;
         stable = false;
       }
     }
     if (stable) break;
   }
-  arr.forEach(it => { it.y = Math.max(MT + LABEL_H, Math.min(SVG_H - MB, it.y)); });
-  const map = new Map<string, number>();
-  arr.forEach(({ id, y }) => map.set(id, y));
-  return map;
+  arr.forEach(it => { it.y = Math.max(topBound, Math.min(botBound, it.y)); });
+  const m = new Map<string, number>();
+  arr.forEach(({ id, y }) => m.set(id, y));
+  return m;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 const EnergyDiagram = forwardRef<SVGSVGElement, Props>(({ levels, transitions }, ref) => {
   const { minE, maxE } = useMemo(() => {
@@ -77,128 +98,137 @@ const EnergyDiagram = forwardRef<SVGSVGElement, Props>(({ levels, transitions },
     return m;
   }, [levels]);
 
-  // ── Level label Y (collision-resolved) ────────────────────────────────────
+  // ── Level line Y positions (order-preserving, minimum gap enforced) ────────
+  // Energy proportionality is used as the starting point but is not strict;
+  // close levels are pushed apart so arrows and labels have room to breathe.
+  const levelYs = useMemo(() => {
+    const items = levels.map(l => ({
+      id: l.id,
+      y: eToY(l.energy, minE, maxE),
+    }));
+    // Use narrower bounds so lines stay well inside the plot area
+    return resolveYCollisions(items, MIN_LEVEL_GAP, MT + 4, MT + PH - 4);
+  }, [levels, minE, maxE]);
+
+  // ── State label Y positions (secondary fine-resolution on top of levelYs) ──
   const levelLabelYs = useMemo(() => {
     const items = levels.map(l => ({
       id: l.id,
-      y: eToY(l.energy, minE, maxE) + FS * 0.35,
+      y: (levelYs.get(l.id) ?? eToY(l.energy, minE, maxE)) + FS * 0.35,
     }));
-    return resolveYCollisions(items, LABEL_V_GAP);
-  }, [levels, minE, maxE]);
+    return resolveYCollisions(items, LABEL_GAP);
+  }, [levels, levelYs, minE, maxE]);
 
-  // ── Arrow Y ranges ─────────────────────────────────────────────────────────
+  // ── Arrow Y ranges (using adjusted level positions) ────────────────────────
   const arrowRanges = useMemo(() => {
     const m = new Map<string, { y1: number; y2: number; yMin: number; yMax: number }>();
     for (const tr of transitions) {
       const f = levelMap.get(tr.fromLevelId);
       const t = levelMap.get(tr.toLevelId);
       if (!f || !t) continue;
-      const y1 = eToY(f.energy, minE, maxE);
-      const y2 = eToY(t.energy, minE, maxE);
+      const y1 = levelYs.get(f.id) ?? eToY(f.energy, minE, maxE);
+      const y2 = levelYs.get(t.id) ?? eToY(t.energy, minE, maxE);
       m.set(tr.id, { y1, y2, yMin: Math.min(y1, y2), yMax: Math.max(y1, y2) });
     }
     return m;
-  }, [transitions, levelMap, minE, maxE]);
+  }, [transitions, levelMap, levelYs, minE, maxE]);
 
-  // ── Auto-assign arrow X positions, separating overlapping shafts ───────────
-  // Desired X comes from user's xOffset. When two desired positions are in the
-  // same shaft-column AND their Y-ranges overlap, the later one is nudged right
-  // by SLOT_W until there's no conflict.
+  // ── Auto-assign arrow X positions (separate overlapping shafts) ────────────
+  // The user's xOffset is the desired column; when two arrows would share the
+  // same column AND their Y ranges overlap, the later one is nudged right.
   const arrowXs = useMemo(() => {
     const result = new Map<string, number>();
     const placed: Array<{ x: number; yMin: number; yMax: number }> = [];
 
     for (const tr of transitions) {
-      const range = arrowRanges.get(tr.id);
-      if (!range) continue;
+      const r = arrowRanges.get(tr.id);
+      if (!r) continue;
 
       let x = ARROW_BASE_X + tr.xOffset;
 
       for (let attempt = 0; attempt < 12; attempt++) {
         const conflict = placed.find(p =>
           Math.abs(p.x - x) < SHAFT_TOL &&
-          Math.min(range.yMax, p.yMax) - Math.max(range.yMin, p.yMin) > 2,
+          Math.min(r.yMax, p.yMax) - Math.max(r.yMin, p.yMin) > 2,
         );
         if (!conflict) break;
         x += SLOT_W;
       }
-      // Clamp inside the line span
       x = Math.min(Math.max(x, LINE_X1 + AW + 2), LINE_X2 - AW - 2);
 
       result.set(tr.id, x);
-      placed.push({ x, yMin: range.yMin, yMax: range.yMax });
+      placed.push({ x, yMin: r.yMin, yMax: r.yMax });
     }
     return result;
   }, [transitions, arrowRanges]);
 
-  // ── Transition label X/Y positions ────────────────────────────────────────
-  // For each label: try RIGHT side of its arrow; fall back to LEFT if the right
-  // side would (a) reach the state-label column, or (b) cross another arrow shaft.
-  // Y is then resolved per X-side group.
+  // ── Transition label X / Y positions ──────────────────────────────────────
+  // For each label: try RIGHT side of its arrow first. Fall back to LEFT if:
+  //   (a) right side would reach the state-label column, OR
+  //   (b) right side would cross another arrow's shaft.
+  // Y collisions are then resolved independently per side (right / left).
   const transLabelPositions = useMemo(() => {
-    // Build shaft registry: { id, x, yMin, yMax }
+    // Shaft registry for quick lookup
     const shafts = transitions.flatMap(tr => {
       const x = arrowXs.get(tr.id);
       const r = arrowRanges.get(tr.id);
       return x != null && r != null ? [{ id: tr.id, x, ...r }] : [];
     });
 
-    type LabelInfo = { id: string; x: number; y: number; side: 'right' | 'left' };
-    const labels: LabelInfo[] = [];
+    type Info = { id: string; x: number; y: number; side: 'right' | 'left' };
+    const labels: Info[] = [];
 
     for (const tr of transitions) {
-      const cx   = arrowXs.get(tr.id);
-      const r    = arrowRanges.get(tr.id);
+      if (!tr.label) continue;
+      const cx = arrowXs.get(tr.id);
+      const r  = arrowRanges.get(tr.id);
       if (cx == null || r == null) continue;
 
-      const midY    = (r.y1 + r.y2) / 2 + FS * 0.35;
-      const labelW  = (tr.label?.length ?? 0) * EST_CW;
-
-      // Right-side candidate
-      const rx      = cx + AW + 4;
-      const rxEnd   = rx + labelW;
+      const midY = (r.y1 + r.y2) / 2;           // label sits at midpoint of shaft
+      const lw   = textWidth(tr.label);           // CJK-aware width estimate
+      const rx   = cx + AW + 4;                  // right-side candidate x
+      const rxEnd = rx + lw;
 
       const rightBlocked =
-        // would reach the state-label column
+        // would collide with state labels
         rxEnd >= LABEL_X - 4 ||
-        // would cross another arrow's shaft
+        // would cross another arrow's shaft (check if shaft.x is in the label's
+        // horizontal span AND midY falls within that shaft's vertical range)
         shafts.some(s =>
           s.id !== tr.id &&
-          s.x > rx && s.x < rxEnd &&         // shaft x is inside label's x span
-          r.y1 !== r.y2 &&                    // not degenerate
-          Math.min(r.yMax, s.yMax) - Math.max(r.yMin, s.yMin) > 2, // Y overlap
+          s.x > rx && s.x < rxEnd &&
+          midY > s.yMin && midY < s.yMax,
         );
 
       let lx: number;
       let side: 'right' | 'left';
       if (!rightBlocked) {
-        lx = rx; side = 'right';
+        lx = rx;  side = 'right';
       } else {
-        // Left side: clamp to stay inside the line span
-        lx = Math.max(LINE_X1 + 2, cx - AW - 4 - labelW);
+        lx = Math.max(LINE_X1 + 2, cx - AW - 4 - lw);
         side = 'left';
       }
 
-      labels.push({ id: tr.id, x: lx, y: midY, side });
+      labels.push({ id: tr.id, x: lx, y: midY + FS * 0.35, side });
     }
 
-    // Resolve Y collisions separately for labels that share a similar X column
-    // (within ±labelWidth of each other). We do two passes: right-side labels
-    // vs left-side labels independently.
-    const rightItems = labels.filter(l => l.side === 'right').map(l => ({ id: l.id, y: l.y }));
-    const leftItems  = labels.filter(l => l.side === 'left' ).map(l => ({ id: l.id, y: l.y }));
-    const rightResolved = resolveYCollisions(rightItems, LABEL_V_GAP);
-    const leftResolved  = resolveYCollisions(leftItems,  LABEL_V_GAP);
+    // Resolve Y collisions within each side independently
+    const resolve = (side: 'right' | 'left') => {
+      const items = labels.filter(l => l.side === side).map(l => ({ id: l.id, y: l.y }));
+      return resolveYCollisions(items, LABEL_GAP);
+    };
+    const rightYs = resolve('right');
+    const leftYs  = resolve('left');
 
     const result = new Map<string, { x: number; y: number }>();
     labels.forEach(l => {
-      const resolved = (l.side === 'right' ? rightResolved : leftResolved);
-      result.set(l.id, { x: l.x, y: resolved.get(l.id) ?? l.y });
+      const ry = (l.side === 'right' ? rightYs : leftYs).get(l.id) ?? l.y;
+      result.set(l.id, { x: l.x, y: ry });
     });
     return result;
   }, [transitions, arrowXs, arrowRanges]);
 
-  // ──────────────────────────────────────────────────────────────────────────
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <svg
       ref={ref}
@@ -210,20 +240,22 @@ const EnergyDiagram = forwardRef<SVGSVGElement, Props>(({ levels, transitions },
       <rect width={SVG_W} height={SVG_H} fill="white" />
 
       {/* Y-axis */}
-      <line x1={ML} y1={MT - 8} x2={ML} y2={MT + PH + 6} stroke="#374151" strokeWidth={1.5} />
-      <polygon points={`${ML-4},${MT-8} ${ML+4},${MT-8} ${ML},${MT-18}`} fill="#374151" />
-      <text x={ML} y={MT-20} textAnchor="middle" fontSize={11} fontWeight="bold"
-        fill="#374151" fontStyle="italic">E</text>
-      <text x={ML-2} y={MT-6}      textAnchor="middle" fontSize={8} fill="#6b7280">高</text>
-      <text x={ML-2} y={MT+PH+18}  textAnchor="middle" fontSize={8} fill="#6b7280">低</text>
+      <line x1={ML} y1={MT - 8} x2={ML} y2={MT + PH + 6}
+        stroke="#374151" strokeWidth={1.5} />
+      <polygon points={`${ML-4},${MT-8} ${ML+4},${MT-8} ${ML},${MT-18}`}
+        fill="#374151" />
+      <text x={ML} y={MT - 20} textAnchor="middle" fontSize={11}
+        fontWeight="bold" fill="#374151" fontStyle="italic">E</text>
+      <text x={ML-2} y={MT - 6}      textAnchor="middle" fontSize={8} fill="#6b7280">高</text>
+      <text x={ML-2} y={MT + PH + 18} textAnchor="middle" fontSize={8} fill="#6b7280">低</text>
 
-      {/* Tick marks */}
+      {/* Axis tick marks — aligned to adjusted level positions so tick = line */}
       {levels.map(lv => {
-        const y = eToY(lv.energy, minE, maxE);
+        const y = levelYs.get(lv.id) ?? eToY(lv.energy, minE, maxE);
         return (
           <g key={`tick-${lv.id}`}>
-            <line x1={ML-4} y1={y} x2={ML} y2={y} stroke="#9ca3af" strokeWidth={1} />
-            <text x={ML-6} y={y+3.5} textAnchor="end" fontSize={7} fill="#9ca3af">
+            <line x1={ML - 4} y1={y} x2={ML} y2={y} stroke="#9ca3af" strokeWidth={1} />
+            <text x={ML - 6} y={y + 3.5} textAnchor="end" fontSize={7} fill="#9ca3af">
               {lv.energy}
             </text>
           </g>
@@ -232,13 +264,13 @@ const EnergyDiagram = forwardRef<SVGSVGElement, Props>(({ levels, transitions },
 
       {/* Level lines + state labels */}
       {levels.map(lv => {
-        const lineY  = eToY(lv.energy, minE, maxE);
+        const lineY  = levelYs.get(lv.id) ?? eToY(lv.energy, minE, maxE);
         const labelY = levelLabelYs.get(lv.id) ?? lineY + FS * 0.35;
         const drift  = Math.abs(labelY - (lineY + FS * 0.35));
         return (
           <g key={`level-${lv.id}`}>
             {drift > FS * 0.7 && (
-              <line x1={LINE_X2+2} y1={lineY} x2={LABEL_X-1} y2={labelY - FS*0.35}
+              <line x1={LINE_X2 + 2} y1={lineY} x2={LABEL_X - 1} y2={labelY - FS * 0.35}
                 stroke="#bfdbfe" strokeWidth={0.8} strokeDasharray="3,2" />
             )}
             <line x1={LINE_X1} y1={lineY} x2={LINE_X2} y2={lineY}
@@ -253,13 +285,13 @@ const EnergyDiagram = forwardRef<SVGSVGElement, Props>(({ levels, transitions },
 
       {/* Transition arrows + labels */}
       {transitions.map(tr => {
-        const r   = arrowRanges.get(tr.id);
-        const cx  = arrowXs.get(tr.id);
-        const lp  = transLabelPositions.get(tr.id);
+        const r  = arrowRanges.get(tr.id);
+        const cx = arrowXs.get(tr.id);
+        const lp = transLabelPositions.get(tr.id);
         if (!r || cx == null) return null;
 
-        const isUp  = r.y2 < r.y1; // endothermic → y2 is higher on screen (smaller Y)
-        const color = '#d97706';    // amber
+        const isUp  = r.y2 < r.y1;   // true when transition goes to higher energy
+        const color = '#d97706';
         const tipY  = r.y2;
         const baseY = isUp ? tipY + AH : tipY - AH;
 
@@ -268,9 +300,9 @@ const EnergyDiagram = forwardRef<SVGSVGElement, Props>(({ levels, transitions },
             {/* Shaft */}
             <line x1={cx} y1={r.y1} x2={cx} y2={baseY}
               stroke={color} strokeWidth={2} />
-            {/* Arrowhead V */}
+            {/* Arrowhead (open V) */}
             <polyline
-              points={`${cx-AW},${baseY} ${cx},${tipY} ${cx+AW},${baseY}`}
+              points={`${cx - AW},${baseY} ${cx},${tipY} ${cx + AW},${baseY}`}
               fill="none" stroke={color} strokeWidth={2}
               strokeLinejoin="round" strokeLinecap="round"
             />
